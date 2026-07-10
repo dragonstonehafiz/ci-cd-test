@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Validates commit messages against the Conventional Commits spec,
+# per CONTRIBUTING.md ("Commit Messages" section).
+#
+# Install with:
+#   git config core.hooksPath .github/hooks
+# or copy manually:
+#   cp .github/hooks/commit-msg .git/hooks/commit-msg
+#   chmod +x .git/hooks/commit-msg
+
+commit_msg_file="$1"
+first_line=$(head -n 1 "$commit_msg_file")
+
+# type(optional-scope)!: description
+# type: feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert
+pattern='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-zA-Z0-9_-]+\))?!?: .+'
+
+if [[ "$first_line" =~ ^Merge ]]; then
+  # Allow git-generated merge commit messages through.
+  exit 0
+fi
+
+if [[ ! "$first_line" =~ $pattern ]]; then
+  echo "Error: commit message does not follow Conventional Commits format." >&2
+  echo "" >&2
+  echo "  <type>(<optional-scope>): <description>" >&2
+  echo "" >&2
+  echo "Valid types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert" >&2
+  echo "" >&2
+  echo "Examples:" >&2
+  echo "  feat: add user authentication" >&2
+  echo "  fix(api): handle null response from backend" >&2
+  echo "  feat(api)!: change authentication method" >&2
+  echo "" >&2
+  echo "Your message:" >&2
+  echo "  $first_line" >&2
+  exit 1
+fi
+
+exit 0

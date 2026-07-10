@@ -1,0 +1,115 @@
+name: Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        type: choice
+        default: sbx
+        options:
+          - sbx
+          - dev
+          - prod
+
+permissions:
+  contents: read
+  deployments: read
+  actions: read
+
+jobs:
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check branch is allowed for deployment
+        run: |
+          REF="${{ github.ref }}"
+          ENV="${{ inputs.environment }}"
+          if [[ "$ENV" == "dev" || "$ENV" == "sbx" ]]; then
+            echo "Branch allowed: $REF ($ENV permits any branch)"
+          elif [[ "$REF" == "refs/heads/main" ]] || [[ "$REF" == refs/heads/release/* ]]; then
+            echo "Branch allowed: $REF"
+          else
+            echo "::error::Branch '$REF' is not allowed. Only 'main' and 'release/**' branches can deploy to prod."
+            exit 1
+          fi
+
+  # Promotion ordering gate. A commit may only be promoted once its predecessor
+  # environment has a SUCCESSFUL deployment of the SAME commit SHA:
+  #   dev  requires a prior successful sbx deploy of this commit
+  #   prod requires a prior successful dev deploy of this commit
+  promotion-gate:
+    name: Promotion Gate
+    needs: [validate]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enforce predecessor deployment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ENVIRONMENT: ${{ inputs.environment }}
+          SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          case "$ENVIRONMENT" in
+            dev)  PRED=sbx ;;
+            prod) PRED=dev ;;
+            sbx)
+              echo "::notice::'$ENVIRONMENT' has no promotion predecessor — gate passes."
+              exit 0
+              ;;
+            *)
+              echo "::error::Unknown environment '$ENVIRONMENT'."
+              exit 1
+              ;;
+          esac
+
+          echo "Checking that commit $SHA was successfully deployed to '$PRED'..."
+          ok=false
+          for id in $(gh api "repos/$REPO/deployments?sha=$SHA&environment=$PRED" --jq '.[].id'); do
+            if gh api "repos/$REPO/deployments/$id/statuses" --jq '.[].state' | grep -qx success; then
+              ok=true
+              break
+            fi
+          done
+
+          if [ "$ok" != true ]; then
+            echo "::error::Promotion blocked — commit $SHA has no successful '$PRED' deployment. Deploy to '$PRED' first before '$ENVIRONMENT'."
+            exit 1
+          fi
+          echo "::notice::Promotion allowed — commit $SHA is deployed on '$PRED'."
+
+  test:
+    name: Test
+    needs: [validate]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install dependencies
+        run: uv pip install --system -r app/requirements.txt
+
+      - name: Run tests
+        working-directory: app
+        run: pytest
+
+  deploy:
+    name: Deploy
+    if: needs.promotion-gate.result == 'success'
+    needs: [validate, promotion-gate, test]
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Deploy
+        run: |
+          echo "Deploying to '${{ inputs.environment }}' for commit ${{ github.sha }}."
