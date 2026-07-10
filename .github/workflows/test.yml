@@ -1,6 +1,9 @@
 name: Test
 
 on:
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       environment:
@@ -19,8 +22,24 @@ permissions:
   actions: read
 
 jobs:
+  branch-name:
+    name: Branch Naming
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate branch naming convention
+        run: |
+          BRANCH="${{ github.head_ref }}"
+          if [[ "$BRANCH" =~ ^(feature|bugfix|hotfix|release)/ ]]; then
+            echo "Branch name valid: $BRANCH"
+          else
+            echo "::error::Branch '$BRANCH' does not follow naming convention. Use: feature/*, bugfix/*, hotfix/*, release/*"
+            exit 1
+          fi
+
   validate:
     name: Validate
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Check branch is allowed for deployment
